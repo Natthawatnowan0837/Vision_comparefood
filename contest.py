@@ -1,19 +1,18 @@
 import tensorflow as tf
-import os
-import cv2
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Dropout, Concatenate
+from tensorflow.keras.models import Model
 import numpy as np
+import cv2
 import pandas as pd
-import matplotlib.pyplot as plt
+import os
+from sklearn.model_selection import train_test_split
 
 # Set path
-DATA_PATH = r"/home/jonut/compare_food/Test Set Samples/Test Images"
-CSV_PATH = r"/home/jonut/compare_food/Test Set Samples/test.csv"
+DATA_PATH = r"D:\Code\compare_food\Questionair Images"
+CSV_PATH = r"D:\Code\compare_food\data_from_questionaire.csv"
 
 # Load dataset
 df = pd.read_csv(CSV_PATH)
-
-# Load model
-loaded_model = tf.keras.models.load_model('/home/jonut/compare_food/trained_model_with_composition_and_blur.h5')
 
 # Function to compute freshness score
 def compute_freshness(image):
@@ -35,7 +34,7 @@ def compute_composition_score(image):
     edge_density = np.sum(edges) / (image.shape[0] * image.shape[1])  # Calculate edge density
     return np.array([edge_density])
 
-# Function to load and preprocess images
+# Image processing function
 def load_and_preprocess_image(image_name):
     img_path = os.path.join(DATA_PATH, image_name)
     img = cv2.imread(img_path, cv2.IMREAD_COLOR)
@@ -52,44 +51,81 @@ def load_and_preprocess_image(image_name):
     
     return img, freshness, blur, composition
 
-# Predict images from CSV
-def predict_images_from_csv():
-    for index, row in df.iterrows():
-        img1 = load_and_preprocess_image(row['Image 1'])
-        img2 = load_and_preprocess_image(row['Image 2'])
+# Load images with filtering out None values
+data = [load_and_preprocess_image(img) for img in df['Image 1']]
+X1 = np.array([d[0] for d in data if d[0] is not None])
+F1 = np.array([d[1] for d in data if d[1] is not None])
+B1 = np.array([d[2] for d in data if d[2] is not None])
+C1 = np.array([d[3] for d in data if d[3] is not None])
 
-        if img1[0] is None or img2[0] is None:
-            continue  # Skip if image loading failed
-        
-        # Prepare inputs
-        img1_data = np.expand_dims(img1[0], axis=0)  # Image 1
-        img2_data = np.expand_dims(img2[0], axis=0)  # Image 2
-        freshness1_data = np.expand_dims(img1[1], axis=0)  # Freshness 1
-        freshness2_data = np.expand_dims(img2[1], axis=0)  # Freshness 2
-        blur1_data = np.expand_dims(img1[2], axis=0)  # Blur 1
-        blur2_data = np.expand_dims(img2[2], axis=0)  # Blur 2
-        composition1_data = np.expand_dims(img1[3], axis=0)  # Composition 1
-        composition2_data = np.expand_dims(img2[3], axis=0)  # Composition 2
+data = [load_and_preprocess_image(img) for img in df['Image 2']]
+X2 = np.array([d[0] for d in data if d[0] is not None])
+F2 = np.array([d[1] for d in data if d[1] is not None])
+B2 = np.array([d[2] for d in data if d[2] is not None])
+C2 = np.array([d[3] for d in data if d[3] is not None])
 
-        # Predict using the model
-        prediction = loaded_model.predict([img1_data, img2_data, freshness1_data, freshness2_data, blur1_data, blur2_data, composition1_data, composition2_data])
+y_classification = np.array(df['Winner']) - 1  # Convert 1,2 to 0,1
 
-        # Output the prediction (1 or 2 for image 1 or image 2)
-        winner = 2 if prediction[0][0] > 0.5 else 1
-        print(f"[{index+1}] Image {winner} is more delicious")
+# Ensure dataset consistency
+min_size = min(len(X1), len(X2), len(y_classification))
+X1, X2, F1, F2, B1, B2, C1, C2, y_classification = X1[:min_size], X2[:min_size], F1[:min_size], F2[:min_size], B1[:min_size], B2[:min_size], C1[:min_size], C2[:min_size], y_classification[:min_size]
 
-        # Show the images with the result
-        fig, ax = plt.subplots(1, 2, figsize=(12, 6))
-        ax[0].imshow(img1[0])
-        ax[0].set_title(f"Image 1\n{'✅' if winner == 1 else ''}")
-        ax[0].axis("off")
+# Split dataset
+X1_train, X1_test, X2_train, X2_test, F1_train, F1_test, F2_train, F2_test, B1_train, B1_test, B2_train, B2_test, C1_train, C1_test, C2_train, C2_test, y_class_train, y_class_test = train_test_split(
+    X1, X2, F1, F2, B1, B2, C1, C2, y_classification, test_size=0.2, random_state=42)
 
-        ax[1].imshow(img2[0])
-        ax[1].set_title(f"Image 2\n{'✅' if winner == 2 else ''}")
-        ax[1].axis("off")
+# Define CNN base model
+def create_base_cnn():
+    input_layer = Input(shape=(224, 224, 3), name='input_layer')
+    x = Conv2D(32, (3, 3), activation='relu', padding='same')(input_layer)
+    x = MaxPooling2D(pool_size=(2, 2))(x)
+    x = Dropout(0.3)(x)  # เพิ่ม Dropout ตรงนี้
+    
+    x = Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+    x = MaxPooling2D(pool_size=(2, 2))(x)
+    x = Dropout(0.4)(x)  # เพิ่ม Dropout ตรงนี้
+    
+    x = Conv2D(128, (3, 3), activation='relu', padding='same')(x)
+    x = MaxPooling2D(pool_size=(2, 2))(x)
+    x = Dropout(0.5)(x)  # เพิ่ม Dropout ตรงนี้
+    
+    x = Flatten()(x)
+    x = Dense(256, activation='relu')(x)
+    x = Dropout(0.6)(x)  # เพิ่ม Dropout ตรงนี้
+    return Model(input_layer, x)
 
-        plt.suptitle(f"Prediction: Image {winner} is more delicious")
-        plt.show()
+# Create twin networks
+base_cnn = create_base_cnn()
+input_1 = Input(shape=(224, 224, 3), name='input_1')
+input_2 = Input(shape=(224, 224, 3), name='input_2')
+freshness_1 = Input(shape=(2,), name='freshness_1')
+freshness_2 = Input(shape=(2,), name='freshness_2')
+blur_1 = Input(shape=(1,), name='blur_1')
+blur_2 = Input(shape=(1,), name='blur_2')
+composition_1 = Input(shape=(1,), name='composition_1')
+composition_2 = Input(shape=(1,), name='composition_2')
 
-# Call the function
-predict_images_from_csv()
+encoded_1 = base_cnn(input_1)
+encoded_2 = base_cnn(input_2)
+
+merged = Concatenate()([encoded_1, encoded_2, freshness_1, freshness_2, blur_1, blur_2, composition_1, composition_2])
+
+# Classification head
+class_output = Dense(1, activation='sigmoid', name='class_output')(merged)
+
+# Build model
+model = Model(inputs=[input_1, input_2, freshness_1, freshness_2, blur_1, blur_2, composition_1, composition_2], 
+              outputs=class_output)
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+# Train model
+model.fit([X1_train, X2_train, F1_train, F2_train, B1_train, B2_train, C1_train, C2_train], y_class_train,
+          validation_data=([X1_test, X2_test, F1_test, F2_test, B1_test, B2_test, C1_test, C2_test], y_class_test),
+          epochs=100, batch_size=64)
+
+# Save model
+model.save('trained_model_with_composition_and_blur.h5')
+
+# Evaluate model
+loss, accuracy = model.evaluate([X1_test, X2_test, F1_test, F2_test, B1_test, B2_test, C1_test, C2_test], y_class_test)
+print(f"Test Loss: {loss}, Test Accuracy: {accuracy}")
